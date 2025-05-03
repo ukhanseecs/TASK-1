@@ -4,7 +4,7 @@ import json
 import os
 import uuid
 from datetime import datetime
-import openai
+import groq
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -14,17 +14,30 @@ load_dotenv()
 AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
 DYNAMODB_TABLE_NAME = os.getenv('DYNAMODB_TABLE_NAME')
 SNS_TOPIC_ARN = os.getenv('SNS_TOPIC_ARN')
+
+# AI API keys
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-USE_OPENAI_BY_DEFAULT = os.getenv('USE_OPENAI_BY_DEFAULT', 'False').lower() == 'true'
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+
+# AI configuration
+USE_AI_BY_DEFAULT = os.getenv('USE_AI_BY_DEFAULT', 'False').lower() == 'true'
+AI_PROVIDER = os.getenv('AI_PROVIDER', 'groq').lower()
 
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 sns_client = boto3.client('sns', region_name=AWS_REGION)
 
-# Configure OpenAI (if API key is provided)
+# Configure OpenAI client (if API key is provided)
+openai_client = None
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
+    openai_client = openai
+
+# Configure Groq client (if API key is provided)
+groq_client = None
+if GROQ_API_KEY:
+    groq_client = groq.Groq(api_key=GROQ_API_KEY)
 
 def read_csv_file(file_path):
     """Read data from CSV file and return as list of dictionaries"""
@@ -59,13 +72,40 @@ def generate_manual_summary(data):
         "summary_type": "manual"
     }
     
-    # Optional: Add some basic statistics if the data is numeric
-    # This is a simplified example - extend as needed for your specific data
     return summary
 
+def generate_groq_summary(data):
+    """Generate a summary using Groq API"""
+    if not data or not groq_client:
+        return "Groq summary not available."
+    
+    try:
+        # Convert data to string format that Groq can process
+        data_sample = data[:5]  # Just use a sample to keep request size manageable
+        data_str = json.dumps(data_sample, indent=2)
+        
+        response = groq_client.chat.completions.create(
+            model="llama3-8b-8192",  # Using LLaMA 3 model
+            messages=[
+                {"role": "system", "content": "You are a data analyst summarizing CSV data."},
+                {"role": "user", "content": f"Please provide a concise summary of this CSV data. Here's a sample: {data_str}"}
+            ]
+        )
+        
+        summary = {
+            "record_count": len(data),
+            "summary": response.choices[0].message.content,
+            "generated_at": datetime.now().isoformat(),
+            "summary_type": "groq"
+        }
+        return summary
+    except Exception as e:
+        print(f"Error generating Groq summary: {e}")
+        return {"error": str(e), "summary_type": "groq_failed"}
+
 def generate_openai_summary(data):
-    """Generate a summary using OpenAI (optional)"""
-    if not data or not openai.api_key:
+    """Generate a summary using OpenAI"""
+    if not data or not openai_client:
         return "OpenAI summary not available."
     
     try:
@@ -91,6 +131,18 @@ def generate_openai_summary(data):
     except Exception as e:
         print(f"Error generating OpenAI summary: {e}")
         return {"error": str(e), "summary_type": "openai_failed"}
+
+def generate_ai_summary(data, provider=None):
+    """Generate a summary using the specified AI provider"""
+    if provider is None:
+        provider = AI_PROVIDER
+        
+    if provider == "groq" and groq_client:
+        return generate_groq_summary(data)
+    elif provider == "openai" and openai_client:
+        return generate_openai_summary(data)
+    else:
+        return {"error": f"No valid API key found for {provider}", "summary_type": "ai_failed"}
 
 def store_in_dynamodb(data, summary):
     """Store data and summary in DynamoDB"""
@@ -176,21 +228,31 @@ def main():
         print("Failed to read CSV data. Exiting.")
         return
     
-    # Generate summaries
+    # Generate manual summary
     manual_summary = generate_manual_summary(data)
     
-    # Choose summary type based on environment variable or user input
-    use_openai = USE_OPENAI_BY_DEFAULT
+    # Determine if we should use AI for summary
+    use_ai = USE_AI_BY_DEFAULT
     
-    if not USE_OPENAI_BY_DEFAULT:
-        use_openai = input("Would you like to use OpenAI for summary generation? (yes/no): ").lower() == 'yes'
+    if not USE_AI_BY_DEFAULT:
+        use_ai = input("Would you like to use AI for summary generation? (yes/no): ").lower() == 'yes'
     
-    if use_openai:
-        if not OPENAI_API_KEY:
+    if use_ai:
+        # Determine which AI provider to use
+        provider = AI_PROVIDER
+        if provider not in ["groq", "openai"]:
+            print(f"Warning: Invalid AI provider '{provider}' in .env file. Using Groq as default.")
+            provider = "groq"
+            
+        if provider == "groq" and not GROQ_API_KEY:
+            print("Warning: Groq API Key is not set in .env file. Using manual summary instead.")
+            summary = manual_summary
+        elif provider == "openai" and not OPENAI_API_KEY:
             print("Warning: OpenAI API Key is not set in .env file. Using manual summary instead.")
             summary = manual_summary
         else:
-            summary = generate_openai_summary(data)
+            print(f"Generating summary using {provider.capitalize()}...")
+            summary = generate_ai_summary(data, provider)
     else:
         summary = manual_summary
     
