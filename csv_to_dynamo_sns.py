@@ -283,24 +283,62 @@ def store_in_dynamodb(data, summary):
         return None
 
 def publish_sns_event(summary_id, summary):
-    """Publish an SNS notification about the processed purchase data"""
+    """Publish an SNS notification about the processed purchase data with full summary content"""
     try:
-        message = {
+        # Extract the actual summary content
+        summary_content = ""
+        if isinstance(summary, dict):
+            if 'summary' in summary:
+                # For AI-generated summaries
+                summary_content = summary.get('summary')
+            elif 'columns' in summary:
+                # For manual summaries
+                summary_content = f"Data contains {summary.get('record_count', 0)} records with columns: {', '.join(summary.get('columns', []))}"
+        elif isinstance(summary, str):
+            summary_content = summary
+            
+        # Create a formatted email message with the summary
+        email_subject = f"Purchase Data Summary - {datetime.now().strftime('%Y-%m-%d')}"
+        
+        email_message = f"""
+Purchase Data Processing Summary
+===============================
+Summary ID: {summary_id}
+Processed Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Record Count: {summary.get('record_count', 0) if isinstance(summary, dict) else 'N/A'}
+Summary Type: {summary.get('summary_type', 'unknown') if isinstance(summary, dict) else 'unknown'}
+
+Summary Content:
+--------------
+{summary_content}
+
+This is an automated message from the Purchase Data Processing System.
+        """
+        
+        # Include both a formatted message for email and raw JSON data for programmatic consumers
+        message_data = {
             'event_type': 'purchase_data_processed',
             'timestamp': datetime.now().isoformat(),
             'summary_id': summary_id,
-            'record_count': summary.get('record_count', 0),
-            'summary_type': summary.get('summary_type', 'unknown'),
-            'processed_date': datetime.now().strftime('%Y-%m-%d')
+            'record_count': summary.get('record_count', 0) if isinstance(summary, dict) else 0,
+            'summary_type': summary.get('summary_type', 'unknown') if isinstance(summary, dict) else 'unknown',
+            'processed_date': datetime.now().strftime('%Y-%m-%d'),
+            'summary_content': summary_content
         }
         
+        # Publish to SNS with both email formatting and JSON data
         response = sns_client.publish(
             TopicArn=SNS_TOPIC_ARN,
-            Message=json.dumps(message),
-            Subject='Purchase Data Processing Completed'
+            Message=json.dumps({
+                'default': json.dumps(message_data),
+                'email': email_message,
+                'sms': f"Purchase data summary ready. {summary.get('record_count', 0) if isinstance(summary, dict) else 0} records processed."
+            }),
+            Subject=email_subject,
+            MessageStructure='json'  # Required when using message targeting for different protocols
         )
         
-        print(f"Published SNS event: MessageId = {response['MessageId']}")
+        print(f"Published SNS event with full summary: MessageId = {response['MessageId']}")
         return True
     except Exception as e:
         print(f"Error publishing SNS event: {e}")
