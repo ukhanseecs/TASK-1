@@ -1,6 +1,21 @@
-\env
-
-env
-.*
+# Environment variables
 .env
-*.env
+
+# Python virtual environment
+env/
+venv/
+ENV/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Local configuration
+*.log
+.DS_Store

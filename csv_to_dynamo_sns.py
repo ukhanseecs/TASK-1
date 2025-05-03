@@ -5,6 +5,7 @@ import os
 import uuid
 from datetime import datetime
 import groq
+import openai
 from dotenv import load_dotenv
 from decimal import Decimal  # Add import for Decimal type
 
@@ -16,7 +17,7 @@ AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
 DYNAMODB_TABLE_NAME = os.getenv('DYNAMODB_TABLE_NAME')
 SNS_TOPIC_ARN = os.getenv('SNS_TOPIC_ARN')
 
-# AI API keys
+# AI API keys - attempt to get from environment variables first
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 
@@ -29,14 +30,53 @@ dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 sns_client = boto3.client('sns', region_name=AWS_REGION)
 
-# Configure OpenAI client (if API key is provided)
+# Function to securely fetch API keys (for production environments)
+def get_secret(secret_name):
+    """Retrieve a secret from AWS Secrets Manager"""
+    try:
+        # Create a Secrets Manager client
+        session = boto3.session.Session()
+        client = session.client(
+            service_name='secretsmanager',
+            region_name=AWS_REGION
+        )
+        response = client.get_secret_value(SecretId=secret_name)
+        if 'SecretString' in response:
+            return response['SecretString']
+        else:
+            return None
+    except Exception as e:
+        print(f"Error retrieving secret {secret_name}: {e}")
+        return None
+
+# Configure AI clients securely
 openai_client = None
+groq_client = None
+
+# Try to get API keys from environment variables first, then from Secrets Manager if needed
+if not OPENAI_API_KEY:
+    try:
+        # To enable this, create a secret in AWS Secrets Manager named 'openai-api-key'
+        secret = get_secret('openai-api-key')
+        if secret:
+            OPENAI_API_KEY = json.loads(secret).get('OPENAI_API_KEY')
+    except Exception as e:
+        print(f"Note: Could not retrieve OpenAI API key from Secrets Manager: {e}")
+
+if not GROQ_API_KEY:
+    try:
+        # To enable this, create a secret in AWS Secrets Manager named 'groq-api-key'
+        secret = get_secret('groq-api-key')
+        if secret:
+            GROQ_API_KEY = json.loads(secret).get('GROQ_API_KEY')
+    except Exception as e:
+        print(f"Note: Could not retrieve Groq API key from Secrets Manager: {e}")
+
+# Initialize AI clients with the securely retrieved API keys
 if OPENAI_API_KEY:
     openai.api_key = OPENAI_API_KEY
     openai_client = openai
 
-# Configure Groq client (if API key is provided)
-groq_client = None
 if GROQ_API_KEY:
     groq_client = groq.Groq(api_key=GROQ_API_KEY)
 
@@ -272,6 +312,13 @@ def main():
         print("Error: SNS_TOPIC_ARN is not set in the .env file")
         return
     
+    # Check if API keys are available
+    if AI_PROVIDER == "groq" and not GROQ_API_KEY:
+        print("Warning: Groq API key is not set. AI summary generation will be unavailable.")
+    
+    if AI_PROVIDER == "openai" and not OPENAI_API_KEY:
+        print("Warning: OpenAI API key is not set. AI summary generation will be unavailable.")
+    
     # Get CSV file path - default to 'csv/data.csv' if available
     default_path = os.path.join('csv', 'data.csv')
     if os.path.exists(default_path):
@@ -324,10 +371,10 @@ def main():
             provider = "groq"
             
         if provider == "groq" and not GROQ_API_KEY:
-            print("Warning: Groq API Key is not set in .env file. Using manual summary instead.")
+            print("Warning: Groq API Key is not available. Using manual summary instead.")
             summary = manual_summary
         elif provider == "openai" and not OPENAI_API_KEY:
-            print("Warning: OpenAI API Key is not set in .env file. Using manual summary instead.")
+            print("Warning: OpenAI API Key is not available. Using manual summary instead.")
             summary = manual_summary
         else:
             print(f"Generating summary using {provider.capitalize()}...")
