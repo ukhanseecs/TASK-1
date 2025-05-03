@@ -75,7 +75,7 @@ def generate_manual_summary(data):
     return summary
 
 def generate_groq_summary(data):
-    """Generate a summary using Groq API"""
+    """Generate a summary using Groq API focusing on purchase data"""
     if not data or not groq_client:
         return "Groq summary not available."
     
@@ -84,11 +84,35 @@ def generate_groq_summary(data):
         data_sample = data[:5]  # Just use a sample to keep request size manageable
         data_str = json.dumps(data_sample, indent=2)
         
+        prompt = f"""
+        The data represents purchase transactions with the following fields:
+        - summary_id: Unique identifier for each transaction (partition key)
+        - department: Department making the purchase
+        - cost_center: Cost center associated with the purchase
+        - requester: Person requesting the purchase
+        - approval_status: Current approval status
+        - approved_by: Person who approved the transaction
+        - vendor: Vendor/supplier name
+        - item: Item being purchased
+        - category: Category of the purchase
+        - cost_usd: Cost in USD
+        - currency: Currency used
+        - purchase_date: Date of purchase
+        - delivery_date: Expected delivery date
+        - payment_method: Method of payment
+        - priority: Priority level
+        - tags: Associated tags
+        - notes: Additional notes
+        
+        Please analyze this sample data and provide a concise business summary:
+        {data_str}
+        """
+        
         response = groq_client.chat.completions.create(
             model="llama3-8b-8192",  # Using LLaMA 3 model
             messages=[
-                {"role": "system", "content": "You are a data analyst summarizing CSV data."},
-                {"role": "user", "content": f"Please provide a concise summary of this CSV data. Here's a sample: {data_str}"}
+                {"role": "system", "content": "You are a procurement analyst summarizing purchase transaction data."},
+                {"role": "user", "content": prompt}
             ]
         )
         
@@ -104,7 +128,7 @@ def generate_groq_summary(data):
         return {"error": str(e), "summary_type": "groq_failed"}
 
 def generate_openai_summary(data):
-    """Generate a summary using OpenAI"""
+    """Generate a summary using OpenAI for purchase transaction data"""
     if not data or not openai_client:
         return "OpenAI summary not available."
     
@@ -113,11 +137,35 @@ def generate_openai_summary(data):
         data_sample = data[:5]  # Just use a sample to keep request size manageable
         data_str = json.dumps(data_sample, indent=2)
         
+        prompt = f"""
+        The data represents purchase transactions with the following fields:
+        - summary_id: Unique identifier for each transaction (partition key)
+        - department: Department making the purchase
+        - cost_center: Cost center associated with the purchase
+        - requester: Person requesting the purchase
+        - approval_status: Current approval status
+        - approved_by: Person who approved the transaction
+        - vendor: Vendor/supplier name
+        - item: Item being purchased
+        - category: Category of the purchase
+        - cost_usd: Cost in USD
+        - currency: Currency used
+        - purchase_date: Date of purchase
+        - delivery_date: Expected delivery date
+        - payment_method: Method of payment
+        - priority: Priority level
+        - tags: Associated tags
+        - notes: Additional notes
+        
+        Please analyze this sample data and provide a concise business summary:
+        {data_str}
+        """
+        
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a data analyst summarizing CSV data."},
-                {"role": "user", "content": f"Please provide a concise summary of this CSV data. Here's a sample: {data_str}"}
+                {"role": "system", "content": "You are a procurement analyst summarizing purchase transaction data."},
+                {"role": "user", "content": prompt}
             ]
         )
         
@@ -149,10 +197,10 @@ def store_in_dynamodb(data, summary):
     try:
         # Create an entry for the overall dataset with summary
         timestamp = datetime.now().isoformat()
-        item_id = str(uuid.uuid4())
+        summary_id = str(uuid.uuid4())
         
         main_item = {
-            'id': item_id,
+            'summary_id': summary_id,  # Using summary_id as the partition key
             'timestamp': timestamp,
             'record_count': len(data),
             'summary': json.dumps(summary),
@@ -161,41 +209,49 @@ def store_in_dynamodb(data, summary):
         
         # Store the main summary item
         table.put_item(Item=main_item)
-        print(f"Stored dataset summary with ID: {item_id}")
+        print(f"Stored dataset summary with summary_id: {summary_id}")
         
-        # Store individual records (optional - comment out if not needed)
-        for i, record in enumerate(data):
-            record_id = f"{item_id}_record_{i}"
-            record_item = {
-                'id': record_id,
-                'parent_id': item_id,
-                'timestamp': timestamp,
-                'data': json.dumps(record),
-                'type': 'record'
-            }
-            table.put_item(Item=record_item)
+        # Store individual records
+        for record in data:
+            # Check if record already has a summary_id, otherwise generate one
+            if 'summary_id' not in record or not record['summary_id']:
+                record['summary_id'] = str(uuid.uuid4())
+                
+            # Convert numeric fields to appropriate types
+            if 'cost_usd' in record and record['cost_usd']:
+                try:
+                    record['cost_usd'] = float(record['cost_usd'])
+                except ValueError:
+                    pass  # Keep as string if conversion fails
+            
+            # Add timestamp for when this record was processed
+            record['processed_timestamp'] = timestamp
+            
+            # Put the record in DynamoDB
+            table.put_item(Item=record)
         
-        print(f"Stored {len(data)} individual records in DynamoDB")
-        return item_id
+        print(f"Stored {len(data)} individual purchase records in DynamoDB")
+        return summary_id
     except Exception as e:
         print(f"Error storing data in DynamoDB: {e}")
         return None
 
-def publish_sns_event(item_id, summary):
-    """Publish an SNS notification about the processed data"""
+def publish_sns_event(summary_id, summary):
+    """Publish an SNS notification about the processed purchase data"""
     try:
         message = {
-            'event_type': 'csv_processed',
+            'event_type': 'purchase_data_processed',
             'timestamp': datetime.now().isoformat(),
-            'item_id': item_id,
+            'summary_id': summary_id,
             'record_count': summary.get('record_count', 0),
-            'summary_type': summary.get('summary_type', 'unknown')
+            'summary_type': summary.get('summary_type', 'unknown'),
+            'processed_date': datetime.now().strftime('%Y-%m-%d')
         }
         
         response = sns_client.publish(
             TopicArn=SNS_TOPIC_ARN,
             Message=json.dumps(message),
-            Subject='CSV Processing Completed'
+            Subject='Purchase Data Processing Completed'
         )
         
         print(f"Published SNS event: MessageId = {response['MessageId']}")
@@ -205,7 +261,7 @@ def publish_sns_event(item_id, summary):
         return False
 
 def main():
-    """Main function to orchestrate the data processing workflow"""
+    """Main function to orchestrate the purchase data processing workflow"""
     # Check if required environment variables are set
     if not DYNAMODB_TABLE_NAME:
         print("Error: DYNAMODB_TABLE_NAME is not set in the .env file")
@@ -215,8 +271,12 @@ def main():
         print("Error: SNS_TOPIC_ARN is not set in the .env file")
         return
     
-    # Get CSV file path
-    csv_file_path = input("Enter the path to your CSV file: ")
+    # Get CSV file path - default to 'csv/data.csv' if available
+    default_path = os.path.join('csv', 'data.csv')
+    if os.path.exists(default_path):
+        csv_file_path = input(f"Enter the path to your CSV file (default: {default_path}): ") or default_path
+    else:
+        csv_file_path = input("Enter the path to your CSV file: ")
     
     if not os.path.exists(csv_file_path):
         print(f"Error: File not found at {csv_file_path}")
@@ -227,6 +287,24 @@ def main():
     if not data:
         print("Failed to read CSV data. Exiting.")
         return
+    
+    # Validate that the CSV has the required fields
+    expected_fields = [
+        'summary_id', 'department', 'cost_center', 'requester', 'approval_status', 
+        'approved_by', 'vendor', 'item', 'category', 'cost_usd', 'currency', 
+        'purchase_date', 'delivery_date', 'payment_method', 'priority', 'tags', 'notes'
+    ]
+    
+    # Check if all expected fields are in the data
+    first_row_keys = list(data[0].keys())
+    missing_fields = [field for field in expected_fields if field not in first_row_keys]
+    
+    if missing_fields:
+        print(f"Warning: The following expected fields are missing from the CSV: {missing_fields}")
+        proceed = input("Do you want to proceed anyway? (yes/no): ").lower() == 'yes'
+        if not proceed:
+            print("Exiting as requested.")
+            return
     
     # Generate manual summary
     manual_summary = generate_manual_summary(data)
@@ -257,15 +335,15 @@ def main():
         summary = manual_summary
     
     # Store in DynamoDB
-    item_id = store_in_dynamodb(data, summary)
-    if not item_id:
+    summary_id = store_in_dynamodb(data, summary)
+    if not summary_id:
         print("Failed to store data in DynamoDB. Exiting.")
         return
     
     # Publish SNS event
-    published = publish_sns_event(item_id, summary)
+    published = publish_sns_event(summary_id, summary)
     if published:
-        print("Process completed successfully!")
+        print("Purchase data processing completed successfully!")
     else:
         print("Process completed but failed to publish SNS event.")
 

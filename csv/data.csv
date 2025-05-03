@@ -1,4 +1,4 @@
-transaction_id,department,cost_center,requester,approval_status,approved_by,vendor,item,category,cost_usd,currency,purchase_date,delivery_date,payment_method,priority,tags,notes
+summary_id,department,cost_center,requester,approval_status,approved_by,vendor,item,category,cost_usd,currency,purchase_date,delivery_date,payment_method,priority,tags,notes
 1,Sales,CC-SAL-01,Alice Smith,Approved,Manager A,Salesforce,CRM Subscription,Software,1200,USD,2025-04-01,2025-04-02,Credit Card,Medium,"renewal,saas",Annual renewal
 2,Sales,CC-SAL-01,Bob Johnson,Pending,,ZoomInfo,Lead List Purchase,Data,850,USD,2025-04-05,2025-04-07,Credit Card,High,"leads,q2",Targeted leads for Q2
 3,Sales,CC-SAL-02,Carlos Martinez,Approved,Manager B,EventCorp,Trade Show Booth,Event,5000,USD,2025-04-12,2025-04-20,Wire Transfer,High,"event,expo",Booth at DevCon Europe
