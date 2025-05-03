@@ -24,6 +24,8 @@ GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 # AI configuration
 USE_AI_BY_DEFAULT = os.getenv('USE_AI_BY_DEFAULT', 'False').lower() == 'true'
 AI_PROVIDER = os.getenv('AI_PROVIDER', 'groq').lower()
+# Flag to disable AWS Secrets Manager lookups if not configured
+USE_SECRETS_MANAGER = os.getenv('USE_SECRETS_MANAGER', 'False').lower() == 'true'
 
 # Initialize AWS clients
 dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
@@ -33,6 +35,9 @@ sns_client = boto3.client('sns', region_name=AWS_REGION)
 # Function to securely fetch API keys (for production environments)
 def get_secret(secret_name):
     """Retrieve a secret from AWS Secrets Manager"""
+    if not USE_SECRETS_MANAGER:
+        return None
+        
     try:
         # Create a Secrets Manager client
         session = boto3.session.Session()
@@ -46,7 +51,7 @@ def get_secret(secret_name):
         else:
             return None
     except Exception as e:
-        print(f"Error retrieving secret {secret_name}: {e}")
+        print(f"Note: Could not retrieve secret {secret_name}: {e}")
         return None
 
 # Configure AI clients securely
@@ -54,7 +59,7 @@ openai_client = None
 groq_client = None
 
 # Try to get API keys from environment variables first, then from Secrets Manager if needed
-if not OPENAI_API_KEY:
+if not OPENAI_API_KEY and USE_SECRETS_MANAGER:
     try:
         # To enable this, create a secret in AWS Secrets Manager named 'openai-api-key'
         secret = get_secret('openai-api-key')
@@ -63,7 +68,7 @@ if not OPENAI_API_KEY:
     except Exception as e:
         print(f"Note: Could not retrieve OpenAI API key from Secrets Manager: {e}")
 
-if not GROQ_API_KEY:
+if not GROQ_API_KEY and USE_SECRETS_MANAGER:
     try:
         # To enable this, create a secret in AWS Secrets Manager named 'groq-api-key'
         secret = get_secret('groq-api-key')
