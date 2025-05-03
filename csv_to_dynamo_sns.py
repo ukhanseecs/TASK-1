@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime
 import groq
 from dotenv import load_dotenv
+from decimal import Decimal  # Add import for Decimal type
 
 # Load environment variables from .env file
 load_dotenv()
@@ -217,11 +218,11 @@ def store_in_dynamodb(data, summary):
             if 'summary_id' not in record or not record['summary_id']:
                 record['summary_id'] = str(uuid.uuid4())
                 
-            # Convert numeric fields to appropriate types
+            # Convert numeric fields to Decimal type for DynamoDB compatibility
             if 'cost_usd' in record and record['cost_usd']:
                 try:
-                    record['cost_usd'] = float(record['cost_usd'])
-                except ValueError:
+                    record['cost_usd'] = Decimal(str(record['cost_usd']))  # Convert to Decimal via string to avoid precision issues
+                except (ValueError, TypeError):
                     pass  # Keep as string if conversion fails
             
             # Add timestamp for when this record was processed
