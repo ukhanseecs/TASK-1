@@ -1,0 +1,709 @@
+Human: the csv file and the dynamo table have the following headers .. annd the tble partition key is transaction_id.......transaction_id	department	cost_center	requester	approval_status	approved_by	vendor	item	category	cost_usd	currency	purchase_date	delivery_date	payment_method	priority	tags	notes......make appropriayec chnages
+
+
+Copilot: I'll help you modify the code to match the CSV and DynamoDB table structure with the provided headers. Let me first understand what we're working with and then make the appropriate changes.I'll modify the code to match the CSV structure and DynamoDB schema you've provided. The headers for both the CSV file and DynamoDB table are: `transaction_id`, `department`, `cost_center`, `requester`, `approval_status`, `approved_by`, `vendor`, `item`, `category`, `cost_usd`, `currency`, `purchase_date`, `delivery_date`, `payment_method`, `priority`, `tags`, and `notes`. Also, you mentioned that the partition key for the DynamoDB table is `transaction_id`.
+
+Let me make the necessary changes:
+````
+def store_in_dynamodb(data, summary):
+    """Store data and summary in DynamoDB"""
+    try:
+        # Create an entry for the overall dataset with summary
+        timestamp = datetime.now().isoformat()
+        summary_id = str(uuid.uuid4())
+        
+        main_item = {
+            'transaction_id': summary_id,  # Using transaction_id as the partition key
+            'timestamp': timestamp,
+            'record_count': len(data),
+            'summary': json.dumps(summary),
+            'type': 'dataset_summary'
+        }
+        
+        # Store the main summary item
+        table.put_item(Item=main_item)
+        print(f"Stored dataset summary with transaction_id: {summary_id}")
+        
+        # Store individual records
+        for record in data:
+            # Check if record already has a transaction_id, otherwise generate one
+            if 'transaction_id' not in record or not record['transaction_id']:
+                record['transaction_id'] = str(uuid.uuid4())
+                
+            # Convert numeric fields to appropriate types
+            if 'cost_usd' in record and record['cost_usd']:
+                try:
+                    record['cost_usd'] = float(record['cost_usd'])
+                except ValueError:
+                    pass  # Keep as string if conversion fails
+            
+            # Add timestamp for when this record was processed
+            record['processed_timestamp'] = timestamp
+            
+            # Put the record in DynamoDB
+            table.put_item(Item=record)
+        
+        print(f"Stored {len(data)} individual purchase records in DynamoDB")
+        return summary_id
+    except Exception as e:
+        print(f"Error storing data in DynamoDB: {e}")
+        return None
+````
+Now let's update the SNS notification to include relevant information about the purchase data and update the AI summaries to reflect the new data structure:
+````
+def publish_sns_event(transaction_id, summary):
+    """Publish an SNS notification about the processed purchase data"""
+    try:
+        message = {
+            'event_type': 'purchase_data_processed',
+            'timestamp': datetime.now().isoformat(),
+            'transaction_id': transaction_id,
+            'record_count': summary.get('record_count', 0),
+            'summary_type': summary.get('summary_type', 'unknown'),
+            'processed_date': datetime.now().strftime('%Y-%m-%d')
+        }
+        
+        response = sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=json.dumps(message),
+            Subject='Purchase Data Processing Completed'
+        )
+        
+        print(f"Published SNS event: MessageId = {response['MessageId']}")
+        return True
+    except Exception as e:
+        print(f"Error publishing SNS event: {e}")
+        return False
+````
+Now let's update the AI summary functions to focus on specific purchase information in the data structure and the main function to properly use the updated transaction_id for consistency:
+````
+def generate_groq_summary(data):
+    """Generate a summary using Groq API focusing on purchase data"""
+    if not data or not groq_client:
+        return "Groq summary not available."
+    
+    try:
+        # Convert data to string format that Groq can process
+        data_sample = data[:5]  # Just use a sample to keep request size manageable
+        data_str = json.dumps(data_sample, indent=2)
+        
+        prompt = f"""
+        The data represents purchase transactions with the following fields:
+        - transaction_id: Unique identifier for each transaction (partition key)
+        - department: Department making the purchase
+        - cost_center: Cost center associated with the purchase
+        - requester: Person requesting the purchase
+        - approval_status: Current approval status
+        - approved_by: Person who approved the transaction
+        - vendor: Vendor/supplier name
+        - item: Item being purchased
+        - category: Category of the purchase
+        - cost_usd: Cost in USD
+        - currency: Currency used
+        - purchase_date: Date of purchase
+        - delivery_date: Expected delivery date
+        - payment_method: Method of payment
+        - priority: Priority level
+        - tags: Associated tags
+        - notes: Additional notes
+        
+        Please analyze this sample data and provide a concise business summary:
+        {data_str}
+        """
+        
+        response = groq_client.chat.completions.create(
+            model="llama3-8b-8192",  # Using LLaMA 3 model
+            messages=[
+                {"role": "system", "content": "You are a procurement analyst summarizing purchase transaction data."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        summary = {
+            "record_count": len(data),
+            "summary": response.choices[0].message.content,
+            "generated_at": datetime.now().isoformat(),
+            "summary_type": "groq"
+        }
+        return summary
+    except Exception as e:
+        print(f"Error generating Groq summary: {e}")
+        return {"error": str(e), "summary_type": "groq_failed"}
+````
+Now let's update the OpenAI summary function to also focus on the purchase data fields structure:
+````
+def generate_openai_summary(data):
+    """Generate a summary using OpenAI for purchase transaction data"""
+    if not data or not openai_client:
+        return "OpenAI summary not available."
+    
+    try:
+        # Convert data to string format that OpenAI can process
+        data_sample = data[:5]  # Just use a sample to keep request size manageable
+        data_str = json.dumps(data_sample, indent=2)
+        
+        prompt = f"""
+        The data represents purchase transactions with the following fields:
+        - transaction_id: Unique identifier for each transaction (partition key)
+        - department: Department making the purchase
+        - cost_center: Cost center associated with the purchase
+        - requester: Person requesting the purchase
+        - approval_status: Current approval status
+        - approved_by: Person who approved the transaction
+        - vendor: Vendor/supplier name
+        - item: Item being purchased
+        - category: Category of the purchase
+        - cost_usd: Cost in USD
+        - currency: Currency used
+        - purchase_date: Date of purchase
+        - delivery_date: Expected delivery date
+        - payment_method: Method of payment
+        - priority: Priority level
+        - tags: Associated tags
+        - notes: Additional notes
+        
+        Please analyze this sample data and provide a concise business summary:
+        {data_str}
+        """
+        
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a procurement analyst summarizing purchase transaction data."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        summary = {
+            "record_count": len(data),
+            "summary": response.choices[0].message['content'],
+            "generated_at": datetime.now().isoformat(),
+            "summary_type": "openai"
+        }
+        return summary
+    except Exception as e:
+        print(f"Error generating OpenAI summary: {e}")
+        return {"error": str(e), "summary_type": "openai_failed"}
+````
+Let's update the  function to properly reference the updated  parameter in the code:
+````
+def main():
+    """Main function to orchestrate the purchase data processing workflow"""
+    # Check if required environment variables are set
+    if not DYNAMODB_TABLE_NAME:
+        print("Error: DYNAMODB_TABLE_NAME is not set in the .env file")
+        return
+    
+    if not SNS_TOPIC_ARN:
+        print("Error: SNS_TOPIC_ARN is not set in the .env file")
+        return
+    
+    # Get CSV file path - default to 'csv/data.csv' if available
+    default_path = os.path.join('csv', 'data.csv')
+    if os.path.exists(default_path):
+        csv_file_path = input(f"Enter the path to your CSV file (default: {default_path}): ") or default_path
+    else:
+        csv_file_path = input("Enter the path to your CSV file: ")
+    
+    if not os.path.exists(csv_file_path):
+        print(f"Error: File not found at {csv_file_path}")
+        return
+    
+    # Read CSV data
+    data = read_csv_file(csv_file_path)
+    if not data:
+        print("Failed to read CSV data. Exiting.")
+        return
+    
+    # Validate that the CSV has the required fields
+    expected_fields = [
+        'transaction_id', 'department', 'cost_center', 'requester', 'approval_status', 
+        'approved_by', 'vendor', 'item', 'category', 'cost_usd', 'currency', 
+        'purchase_date', 'delivery_date', 'payment_method', 'priority', 'tags', 'notes'
+    ]
+    
+    # Check if all expected fields are in the data
+    first_row_keys = list(data[0].keys())
+    missing_fields = [field for field in expected_fields if field not in first_row_keys]
+    
+    if missing_fields:
+        print(f"Warning: The following expected fields are missing from the CSV: {missing_fields}")
+        proceed = input("Do you want to proceed anyway? (yes/no): ").lower() == 'yes'
+        if not proceed:
+            print("Exiting as requested.")
+            return
+    
+    # Generate manual summary
+    manual_summary = generate_manual_summary(data)
+    
+    # Determine if we should use AI for summary
+    use_ai = USE_AI_BY_DEFAULT
+    
+    if not USE_AI_BY_DEFAULT:
+        use_ai = input("Would you like to use AI for summary generation? (yes/no): ").lower() == 'yes'
+    
+    if use_ai:
+        # Determine which AI provider to use
+        provider = AI_PROVIDER
+        if provider not in ["groq", "openai"]:
+            print(f"Warning: Invalid AI provider '{provider}' in .env file. Using Groq as default.")
+            provider = "groq"
+            
+        if provider == "groq" and not GROQ_API_KEY:
+            print("Warning: Groq API Key is not set in .env file. Using manual summary instead.")
+            summary = manual_summary
+        elif provider == "openai" and not OPENAI_API_KEY:
+            print("Warning: OpenAI API Key is not set in .env file. Using manual summary instead.")
+            summary = manual_summary
+        else:
+            print(f"Generating summary using {provider.capitalize()}...")
+            summary = generate_ai_summary(data, provider)
+    else:
+        summary = manual_summary
+    
+    # Store in DynamoDB
+    transaction_id = store_in_dynamodb(data, summary)
+    if not transaction_id:
+        print("Failed to store data in DynamoDB. Exiting.")
+        return
+    
+    # Publish SNS event
+    published = publish_sns_event(transaction_id, summary)
+    if published:
+        print("Purchase data processing completed successfully!")
+    else:
+        print("Process completed but failed to publish SNS event.")
+````
+I've updated the code to match the CSV and DynamoDB table structure you provided, with all the necessary headers and using  as the partition key. Here's a summary of the changes made:
+
+1. Modified the  function to:
+   - Use  as the partition key instead of `id`
+   - Preserve existing transaction IDs from the CSV data or generate new ones if missing
+   - Convert numeric fields like `cost_usd` to the appropriate data type
+   - Add a timestamp to track when records were processed
+
+2. Updated the  function to:
+   - Use  as the identifier instead of `item_id`
+   - Include purchase-specific information in the SNS notification
+   - Change the subject line to "Purchase Data Processing Completed"
+
+3. Enhanced both AI summary functions (Groq and OpenAI) to:
+   - Focus specifically on the purchase data schema
+   - Include detailed descriptions of each field in the prompts
+   - Position the AI as a "procurement analyst" for better context
+
+4. Improved the  function to:
+   - Default to using the 'csv/data.csv' file if it exists
+   - Validate that the CSV has the expected purchase data fields
+   - Warn about any missing fields and provide an option to proceed anyway
+   - Use consistent terminology around the purchase data processing workflow
+
+These changes ensure that your code now properly handles the specific structure of your purchase data CSV and correctly stores it in DynamoDB using  as the partition key.
+
+Human: so the partition key is summary_id and so is the first header, make changes
+
+Copilot: I'll modify the code to change the partition key and first header to  instead of . Let me make these changes:
+````
+def store_in_dynamodb(data, summary):
+    """Store data and summary in DynamoDB"""
+    try:
+        # Create an entry for the overall dataset with summary
+        timestamp = datetime.now().isoformat()
+        summary_id = str(uuid.uuid4())
+        
+        main_item = {
+            'summary_id': summary_id,  # Using summary_id as the partition key
+            'timestamp': timestamp,
+            'record_count': len(data),
+            'summary': json.dumps(summary),
+            'type': 'dataset_summary'
+        }
+        
+        # Store the main summary item
+        table.put_item(Item=main_item)
+        print(f"Stored dataset summary with summary_id: {summary_id}")
+        
+        # Store individual records
+        for record in data:
+            # Check if record already has a summary_id, otherwise generate one
+            if 'summary_id' not in record or not record['summary_id']:
+                record['summary_id'] = str(uuid.uuid4())
+                
+            # Convert numeric fields to appropriate types
+            if 'cost_usd' in record and record['cost_usd']:
+                try:
+                    record['cost_usd'] = float(record['cost_usd'])
+                except ValueError:
+                    pass  # Keep as string if conversion fails
+            
+            # Add timestamp for when this record was processed
+            record['processed_timestamp'] = timestamp
+            
+            # Put the record in DynamoDB
+            table.put_item(Item=record)
+        
+        print(f"Stored {len(data)} individual purchase records in DynamoDB")
+        return summary_id
+    except Exception as e:
+        print(f"Error storing data in DynamoDB: {e}")
+        return None
+````
+I'll continue making the necessary changes to update all instances of  to  throughout the code:
+````
+def publish_sns_event(summary_id, summary):
+    """Publish an SNS notification about the processed purchase data"""
+    try:
+        message = {
+            'event_type': 'purchase_data_processed',
+            'timestamp': datetime.now().isoformat(),
+            'summary_id': summary_id,
+            'record_count': summary.get('record_count', 0),
+            'summary_type': summary.get('summary_type', 'unknown'),
+            'processed_date': datetime.now().strftime('%Y-%m-%d')
+        }
+        
+        response = sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=json.dumps(message),
+            Subject='Purchase Data Processing Completed'
+        )
+        
+        print(f"Published SNS event: MessageId = {response['MessageId']}")
+        return True
+    except Exception as e:
+        print(f"Error publishing SNS event: {e}")
+        return False
+````
+Now I need to update the main function to use  as the first header in the CSV instead of `transaction_id`, and I need to update the AI summary functions to reference  as well:
+````
+def main():
+    """Main function to orchestrate the purchase data processing workflow"""
+    # Check if required environment variables are set
+    if not DYNAMODB_TABLE_NAME:
+        print("Error: DYNAMODB_TABLE_NAME is not set in the .env file")
+        return
+    
+    if not SNS_TOPIC_ARN:
+        print("Error: SNS_TOPIC_ARN is not set in the .env file")
+        return
+    
+    # Get CSV file path - default to 'csv/data.csv' if available
+    default_path = os.path.join('csv', 'data.csv')
+    if os.path.exists(default_path):
+        csv_file_path = input(f"Enter the path to your CSV file (default: {default_path}): ") or default_path
+    else:
+        csv_file_path = input("Enter the path to your CSV file: ")
+    
+    if not os.path.exists(csv_file_path):
+        print(f"Error: File not found at {csv_file_path}")
+        return
+    
+    # Read CSV data
+    data = read_csv_file(csv_file_path)
+    if not data:
+        print("Failed to read CSV data. Exiting.")
+        return
+    
+    # Validate that the CSV has the required fields
+    expected_fields = [
+        'summary_id', 'department', 'cost_center', 'requester', 'approval_status', 
+        'approved_by', 'vendor', 'item', 'category', 'cost_usd', 'currency', 
+        'purchase_date', 'delivery_date', 'payment_method', 'priority', 'tags', 'notes'
+    ]
+    
+    # Check if all expected fields are in the data
+    first_row_keys = list(data[0].keys())
+    missing_fields = [field for field in expected_fields if field not in first_row_keys]
+    
+    if missing_fields:
+        print(f"Warning: The following expected fields are missing from the CSV: {missing_fields}")
+        proceed = input("Do you want to proceed anyway? (yes/no): ").lower() == 'yes'
+        if not proceed:
+            print("Exiting as requested.")
+            return
+    
+    # Generate manual summary
+    manual_summary = generate_manual_summary(data)
+    
+    # Determine if we should use AI for summary
+    use_ai = USE_AI_BY_DEFAULT
+    
+    if not USE_AI_BY_DEFAULT:
+        use_ai = input("Would you like to use AI for summary generation? (yes/no): ").lower() == 'yes'
+    
+    if use_ai:
+        # Determine which AI provider to use
+        provider = AI_PROVIDER
+        if provider not in ["groq", "openai"]:
+            print(f"Warning: Invalid AI provider '{provider}' in .env file. Using Groq as default.")
+            provider = "groq"
+            
+        if provider == "groq" and not GROQ_API_KEY:
+            print("Warning: Groq API Key is not set in .env file. Using manual summary instead.")
+            summary = manual_summary
+        elif provider == "openai" and not OPENAI_API_KEY:
+            print("Warning: OpenAI API Key is not set in .env file. Using manual summary instead.")
+            summary = manual_summary
+        else:
+            print(f"Generating summary using {provider.capitalize()}...")
+            summary = generate_ai_summary(data, provider)
+    else:
+        summary = manual_summary
+    
+    # Store in DynamoDB
+    summary_id = store_in_dynamodb(data, summary)
+    if not summary_id:
+        print("Failed to store data in DynamoDB. Exiting.")
+        return
+    
+    # Publish SNS event
+    published = publish_sns_event(summary_id, summary)
+    if published:
+        print("Purchase data processing completed successfully!")
+    else:
+        print("Process completed but failed to publish SNS event.")
+````
+Now I need to update the AI summary functions to use  instead of `transaction_id` in their prompt texts:
+````
+def generate_groq_summary(data):
+    """Generate a summary using Groq API focusing on purchase data"""
+    if not data or not groq_client:
+        return "Groq summary not available."
+    
+    try:
+        # Convert data to string format that Groq can process
+        data_sample = data[:5]  # Just use a sample to keep request size manageable
+        data_str = json.dumps(data_sample, indent=2)
+        
+        prompt = f"""
+        The data represents purchase transactions with the following fields:
+        - summary_id: Unique identifier for each transaction (partition key)
+        - department: Department making the purchase
+        - cost_center: Cost center associated with the purchase
+        - requester: Person requesting the purchase
+        - approval_status: Current approval status
+        - approved_by: Person who approved the transaction
+        - vendor: Vendor/supplier name
+        - item: Item being purchased
+        - category: Category of the purchase
+        - cost_usd: Cost in USD
+        - currency: Currency used
+        - purchase_date: Date of purchase
+        - delivery_date: Expected delivery date
+        - payment_method: Method of payment
+        - priority: Priority level
+        - tags: Associated tags
+        - notes: Additional notes
+        
+        Please analyze this sample data and provide a concise business summary:
+        {data_str}
+        """
+        
+        response = groq_client.chat.completions.create(
+            model="llama3-8b-8192",  # Using LLaMA 3 model
+            messages=[
+                {"role": "system", "content": "You are a procurement analyst summarizing purchase transaction data."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        summary = {
+            "record_count": len(data),
+            "summary": response.choices[0].message.content,
+            "generated_at": datetime.now().isoformat(),
+            "summary_type": "groq"
+        }
+        return summary
+    except Exception as e:
+        print(f"Error generating Groq summary: {e}")
+        return {"error": str(e), "summary_type": "groq_failed"}
+````
+I still need to update the OpenAI summary function to use  instead of `transaction_id` in the prompt text:
+````
+def generate_openai_summary(data):
+    """Generate a summary using OpenAI for purchase transaction data"""
+    if not data or not openai_client:
+        return "OpenAI summary not available."
+    
+    try:
+        # Convert data to string format that OpenAI can process
+        data_sample = data[:5]  # Just use a sample to keep request size manageable
+        data_str = json.dumps(data_sample, indent=2)
+        
+        prompt = f"""
+        The data represents purchase transactions with the following fields:
+        - summary_id: Unique identifier for each transaction (partition key)
+        - department: Department making the purchase
+        - cost_center: Cost center associated with the purchase
+        - requester: Person requesting the purchase
+        - approval_status: Current approval status
+        - approved_by: Person who approved the transaction
+        - vendor: Vendor/supplier name
+        - item: Item being purchased
+        - category: Category of the purchase
+        - cost_usd: Cost in USD
+        - currency: Currency used
+        - purchase_date: Date of purchase
+        - delivery_date: Expected delivery date
+        - payment_method: Method of payment
+        - priority: Priority level
+        - tags: Associated tags
+        - notes: Additional notes
+        
+        Please analyze this sample data and provide a concise business summary:
+        {data_str}
+        """
+        
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a procurement analyst summarizing purchase transaction data."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        summary = {
+            "record_count": len(data),
+            "summary": response.choices[0].message['content'],
+            "generated_at": datetime.now().isoformat(),
+            "summary_type": "openai"
+        }
+        return summary
+    except Exception as e:
+        print(f"Error generating OpenAI summary: {e}")
+        return {"error": str(e), "summary_type": "openai_failed"}
+````
+I've updated the code to use  as the partition key and first header in the CSV file structure, as requested. All instances of `transaction_id` have been replaced with  throughout the code, including:
+
+1. In the  function, where the partition key is now correctly set as 
+2. In the  function, using  in the message payload
+3. In the  function's expected field list, which now starts with  instead of `transaction_id`
+4. In both AI summary function prompts (Groq and OpenAI), which now correctly describe the data structure with  as the unique identifier
+
+These changes ensure that your code now properly handles the CSV data with  as the first column header and uses it as the partition key for the DynamoDB table, as per your requirements.
+
+Human: Would you like to use AI for summary generation? (yes/no): y
+Stored dataset summary with summary_id: 0baf68bc-13ba-4831-8692-8d24875849f5
+Error storing data in DynamoDB: Float types are not supported. Use Decimal types instead.
+Failed to store data in DynamoDB. Exiting.
+
+Copilot: I'll help you fix the error in the code. It looks like we're trying to store float values for `cost_usd` in DynamoDB, but DynamoDB doesn't support Python's float type directly. Instead, we need to use the Decimal type from the decimal module.
+````
+import boto3
+import csv
+import json
+import os
+import uuid
+from datetime import datetime
+import groq
+from dotenv import load_dotenv
+from decimal import Decimal  # Add import for Decimal type
+
+# ...existing code...
+````
+Now I need to update the  function to use the Decimal type for numeric values. This will fix the "Float types are not supported. Use Decimal types instead" error:
+````
+def store_in_dynamodb(data, summary):
+    """Store data and summary in DynamoDB"""
+    try:
+        # Create an entry for the overall dataset with summary
+        timestamp = datetime.now().isoformat()
+        summary_id = str(uuid.uuid4())
+        
+        main_item = {
+            'summary_id': summary_id,  # Using summary_id as the partition key
+            'timestamp': timestamp,
+            'record_count': len(data),
+            'summary': json.dumps(summary),
+            'type': 'dataset_summary'
+        }
+        
+        # Store the main summary item
+        table.put_item(Item=main_item)
+        print(f"Stored dataset summary with summary_id: {summary_id}")
+        
+        # Store individual records
+        for record in data:
+            # Check if record already has a summary_id, otherwise generate one
+            if 'summary_id' not in record or not record['summary_id']:
+                record['summary_id'] = str(uuid.uuid4())
+                
+            # Convert numeric fields to Decimal type for DynamoDB compatibility
+            if 'cost_usd' in record and record['cost_usd']:
+                try:
+                    record['cost_usd'] = Decimal(str(record['cost_usd']))  # Convert to Decimal via string to avoid precision issues
+                except (ValueError, TypeError):
+                    pass  # Keep as string if conversion fails
+            
+            # Add timestamp for when this record was processed
+            record['processed_timestamp'] = timestamp
+            
+            # Put the record in DynamoDB
+            table.put_item(Item=record)
+        
+        print(f"Stored {len(data)} individual purchase records in DynamoDB")
+        return summary_id
+    except Exception as e:
+        print(f"Error storing data in DynamoDB: {e}")
+        return None
+````
+I've updated the code to fix the error you encountered. The issue was that DynamoDB doesn't support Python's float type directly, which was causing the "Float types are not supported. Use Decimal types instead" error when trying to store the CSV data.
+
+Key changes made:
+
+1. Added the necessary import:  at the top of the file
+
+2. Modified the  function to convert the `cost_usd` values to the Decimal type:
+   ```python
+   if 'cost_usd' in record and record['cost_usd']:
+       try:
+           record['cost_usd'] = Decimal(str(record['cost_usd']))  # Convert to Decimal via string to avoid precision issues
+       except (ValueError, TypeError):
+           pass  # Keep as string if conversion fails
+   ```
+
+The conversion is done using  pattern, which is a best practice to avoid floating-point precision issues when converting to Decimal. This should resolve the error you were seeing, allowing your purchase data to be properly stored in DynamoDB.
+
+Try running the script again, and it should now successfully store the data in the DynamoDB table.
+
+Human: Would you like to use AI for summary generation? (yes/no): n
+Stored dataset summary with summary_id: 11d90126-b94c-469e-b4b2-0fa706d43450
+Stored 20 individual purchase records in DynamoDB
+Error publishing SNS event: An error occurred (InvalidParameter) when calling the Publish operation: Invalid parameter: TopicArn Reason: An ARN must have at least 6 elements, not 5   
+Process completed but failed to publish SNS event.
+
+Copilot: I can see the error in the SNS Topic ARN format. Let me fix that for you.I can see the issue with the SNS Topic ARN in your  file. The ARN format is incorrect, which is causing the error. The error message says "An ARN must have at least 6 elements, not 5" because the ARN is missing the proper format.
+
+The current ARN in your  file is:
+```
+SNS_TOPIC_ARN=aws:sns:eu-north-1:266735842488:CSVSummaryTopic
+```
+
+It should be in the format `arn:aws:service:region:account:resource`. Let me fix this by updating the  file:
+````
+# AWS Configuration
+AWS_REGION=eu-north-1
+DYNAMODB_TABLE_NAME=CSV_Summaries  
+SNS_TOPIC_ARN=arn:aws:sns:eu-north-1:266735842488:CSVSummaryTopic
+
+# API Configuration
+# ...existing code...
+````
+I've fixed the SNS Topic ARN in your  file. The error occurred because it was missing the required "arn:" prefix at the beginning of the ARN string.
+
+The correct format for an AWS ARN is:
+```
+arn:partition:service:region:account-id:resource-id
+```
+
+I've updated your ARN from:
+```
+aws:sns:eu-north-1:266735842488:CSVSummaryTopic
+```
+
+To the proper format:
+```
+arn:aws:sns:eu-north-1:266735842488:CSVSummaryTopic
+```
+
+This should resolve the "An ARN must have at least 6 elements, not 5" error when publishing the SNS notification. The next time you run the script, the SNS notification should be published successfully.

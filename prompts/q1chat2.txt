@@ -1,0 +1,92 @@
+Human: i want to send the summary as the email in sns
+
+Copilot: I'll help you modify the code to send the summary as the email content in the SNS notification instead of just sending a reference to it. Let me make the necessary changes.
+
+First, let me understand the current implementation:I'll modify the code to include the actual summary content in the SNS email notification, not just a reference to it. The current implementation only sends metadata about the summary to SNS, but we need to include the full summary text in the notification.
+
+Let's update the `publish_sns_event` function to include the actual summary content in the email:
+````
+def publish_sns_event(summary_id, summary):
+    """Publish an SNS notification about the processed purchase data with full summary content"""
+    try:
+        # Extract the actual summary content
+        summary_content = ""
+        if isinstance(summary, dict):
+            if 'summary' in summary:
+                # For AI-generated summaries
+                summary_content = summary.get('summary')
+            elif 'columns' in summary:
+                # For manual summaries
+                summary_content = f"Data contains {summary.get('record_count', 0)} records with columns: {', '.join(summary.get('columns', []))}"
+        elif isinstance(summary, str):
+            summary_content = summary
+            
+        # Create a formatted email message with the summary
+        email_subject = f"Purchase Data Summary - {datetime.now().strftime('%Y-%m-%d')}"
+        
+        email_message = f"""
+Purchase Data Processing Summary
+===============================
+Summary ID: {summary_id}
+Processed Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Record Count: {summary.get('record_count', 0) if isinstance(summary, dict) else 'N/A'}
+Summary Type: {summary.get('summary_type', 'unknown') if isinstance(summary, dict) else 'unknown'}
+
+Summary Content:
+--------------
+{summary_content}
+
+This is an automated message from the Purchase Data Processing System.
+        """
+        
+        # Include both a formatted message for email and raw JSON data for programmatic consumers
+        message_data = {
+            'event_type': 'purchase_data_processed',
+            'timestamp': datetime.now().isoformat(),
+            'summary_id': summary_id,
+            'record_count': summary.get('record_count', 0) if isinstance(summary, dict) else 0,
+            'summary_type': summary.get('summary_type', 'unknown') if isinstance(summary, dict) else 'unknown',
+            'processed_date': datetime.now().strftime('%Y-%m-%d'),
+            'summary_content': summary_content
+        }
+        
+        # Publish to SNS with both email formatting and JSON data
+        response = sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=json.dumps({
+                'default': json.dumps(message_data),
+                'email': email_message,
+                'sms': f"Purchase data summary ready. {summary.get('record_count', 0) if isinstance(summary, dict) else 0} records processed."
+            }),
+            Subject=email_subject,
+            MessageStructure='json'  # Required when using message targeting for different protocols
+        )
+        
+        print(f"Published SNS event with full summary: MessageId = {response['MessageId']}")
+        return True
+    except Exception as e:
+        print(f"Error publishing SNS event: {e}")
+        return False
+````
+I've updated the code to include the summary content in the SNS email notification. Here's what changed:
+
+1. The  function now extracts the actual summary content based on the type of summary:
+   - For AI-generated summaries, it uses the 'summary' field
+   - For manual summaries, it creates a readable summary showing record count and columns
+
+2. Added a properly formatted email message with sections for:
+   - Summary ID and processing details
+   - Record count and summary type
+   - The actual summary content
+
+3. Implemented SNS message targeting using the  parameter which allows:
+   - Sending formatted text for email subscribers
+   - Sending condensed messages for SMS subscribers
+   - Sending complete JSON data for other subscribers
+
+This implementation ensures that:
+- Email subscribers will receive a nicely formatted message with the complete summary
+- SMS subscribers get a brief notification
+- Applications consuming the SNS topic can receive the full data in JSON format
+
+The changes maintain all the existing functionality while adding the ability to deliver the full summary as the email body. This way, recipients don't need to look up the summary in DynamoDB - they'll get the complete information directly in their email.
